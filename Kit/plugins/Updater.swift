@@ -146,7 +146,7 @@ public class Updater {
 
                 // Check whether this page contained any release newer than current.
                 // If not, older pages won't either — stop paginating.
-                let hasNewer = releases.contains { self.isNewestVersion(current: self.currentVersion, latest: $0.tag) }
+                let hasNewer = releases.contains { isNewestVersion(currentVersion: self.currentVersion, latestVersion: $0.tag) }
                 guard hasNewer else {
                     completion(bestInCooldown ?? candidate, nil)
                     return
@@ -174,11 +174,6 @@ public class Updater {
         }
 
         scanPage(1)
-    }
-
-    // Helper to check newer version without the per-call overhead of the public signature
-    private func isNewestVersion(current: String, latest: String) -> Bool {
-        return Kit.isNewestVersion(currentVersion: current, latestVersion: latest)
     }
 
     private var cooldownDays: Int {
