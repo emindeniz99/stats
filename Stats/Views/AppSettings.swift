@@ -17,10 +17,6 @@ class ApplicationSettings: NSStackView {
         Store.shared.string(key: "update-interval", defaultValue: AppUpdateInterval.silent.rawValue)
     }
 
-    private var updateCooldownValue: String {
-        "\(Store.shared.int(key: "update-cooldown-days", defaultValue: 0))"
-    }
-    
     private var temperatureUnitsValue: String {
         get { Store.shared.string(key: "temperature_units", defaultValue: "system") }
         set { Store.shared.set(key: "temperature_units", value: newValue) }
