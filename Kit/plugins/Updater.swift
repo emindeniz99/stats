@@ -41,13 +41,14 @@ internal struct Version {
 
 public class Updater {
     private let github: URL
+    private let githubList: URL
     private let server: URL
-    
+
     private let appName: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as! String
     private let currentVersion: String = "v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String)"
-    
+
     private var observation: NSKeyValueObservation?
-    
+
     private var lastCheckTS: Int {
         get {
             return Store.shared.int(key: "updater_check_ts", defaultValue: -1)
@@ -64,9 +65,10 @@ public class Updater {
             Store.shared.set(key: "updater_install_ts", value: newValue)
         }
     }
-    
+
     public init(github: String, url: String) {
         self.github = URL(string: "https://api.github.com/repos/\(github)/releases/latest")!
+        self.githubList = URL(string: "https://api.github.com/repos/\(github)/releases?per_page=10")!
         self.server = URL(string: "\(url)?macOS=\(ProcessInfo().operatingSystemVersion.getFullVersion())")!
     }
     
@@ -90,9 +92,29 @@ public class Updater {
             self.lastCheckTS = Int(Date().timeIntervalSince1970)
         }
 
-        self.fetchRelease(uri: self.server) { (result, err) in
+        // Try custom server for the latest release first
+        self.fetchRelease(uri: self.server) { result, err in
             guard let result = result, err == nil else {
-                self.fetchRelease(uri: self.github) { (result, err) in
+                self.checkGitHubReleases(completion: completion)
+                return
+            }
+
+            let version = self.buildVersion(result)
+            // If the latest release is still in cooldown, search recent releases for one that has aged out
+            if version.inCooldown {
+                self.checkGitHubReleases(completion: completion)
+            } else {
+                completion(version, nil)
+            }
+        }
+    }
+
+    // Fetch the GitHub releases list and return the best candidate respecting cooldown.
+    private func checkGitHubReleases(completion: @escaping (_ result: version_s?, _ error: Error?) -> Void) {
+        self.fetchReleases(uri: self.githubList) { releases, err in
+            guard let releases = releases, err == nil else {
+                // List endpoint failed, fall back to single-release endpoint
+                self.fetchRelease(uri: self.github) { result, err in
                     guard let result = result, err == nil else {
                         completion(nil, err)
                         return
@@ -101,7 +123,7 @@ public class Updater {
                 }
                 return
             }
-            completion(self.buildVersion(result), nil)
+            completion(self.buildBestVersion(from: releases), nil)
         }
     }
 
@@ -130,6 +152,46 @@ public class Updater {
             inCooldown: inCooldown,
             daysUntilReady: daysUntilReady
         )
+    }
+
+    // Walk releases newest-first and return the first one that has aged past the cooldown window.
+    // Falls back to the very latest if every newer release is still in cooldown.
+    private func buildBestVersion(from releases: [(tag: String, url: String, publishedAt: Date?)]) -> version_s? {
+        guard !releases.isEmpty else { return nil }
+
+        let cooldown = self.cooldownDays
+        let now = Date()
+        var firstNewer: (tag: String, url: String, publishedAt: Date?)? = nil
+
+        for release in releases {
+            guard isNewestVersion(currentVersion: self.currentVersion, latestVersion: release.tag) else {
+                continue
+            }
+
+            if firstNewer == nil { firstNewer = release }
+
+            if cooldown == 0 {
+                return buildVersion(release)
+            }
+
+            guard let publishedAt = release.publishedAt else {
+                // No date — can't check cooldown, treat as ready
+                return buildVersion(release)
+            }
+
+            let daysSince = Calendar.current.dateComponents([.day], from: publishedAt, to: now).day ?? 0
+            if daysSince >= cooldown {
+                return buildVersion(release)  // This release has aged past the cooldown window
+            }
+            // Still in cooldown — try the next (older) release
+        }
+
+        // Every newer release is in cooldown (or no newer release exists).
+        // Return the latest with inCooldown set so callers can show appropriate UI.
+        if let latest = firstNewer {
+            return buildVersion(latest)
+        }
+        return buildVersion(releases[0])  // No newer version at all
     }
     
     private func fetchRelease(uri: URL, completion: @escaping (_ result: (tag: String, url: String, publishedAt: Date?)?, _ error: Error?) -> Void) {
@@ -164,6 +226,50 @@ public class Updater {
         task.resume()
     }
     
+    private func fetchReleases(uri: URL, completion: @escaping (_ result: [(tag: String, url: String, publishedAt: Date?)]?, _ error: Error?) -> Void) {
+        let task = URLSession.shared.dataTask(with: uri) { data, _, error in
+            guard let data = data, error == nil else {
+                completion(nil, "no data")
+                return
+            }
+
+            do {
+                let jsonResponse = try JSONSerialization.jsonObject(with: data, options: [])
+                guard let items = jsonResponse as? [[String: Any]] else {
+                    completion(nil, "parse json")
+                    return
+                }
+
+                let formatter = ISO8601DateFormatter()
+                var results: [(tag: String, url: String, publishedAt: Date?)] = []
+
+                for item in items {
+                    guard let tag = item["tag_name"] as? String,
+                          let assets = item["assets"] as? [[String: Any]],
+                          let asset = assets.first(where: { $0["name"] as? String == "\(self.appName).dmg" }),
+                          let downloadURL = asset["browser_download_url"] as? String else {
+                        continue
+                    }
+                    var publishedAt: Date?
+                    if let str = item["published_at"] as? String {
+                        publishedAt = formatter.date(from: str)
+                    }
+                    results.append((tag, downloadURL, publishedAt))
+                }
+
+                guard !results.isEmpty else {
+                    completion(nil, "no valid releases found")
+                    return
+                }
+
+                completion(results, nil)
+            } catch let parsingError {
+                completion(nil, parsingError)
+            }
+        }
+        task.resume()
+    }
+
     public func download(_ url: URL, progress: @escaping (_ progress: Progress) -> Void = {_ in }, completion: @escaping (_ path: String) -> Void = {_ in }) {
         let downloadTask = URLSession.shared.downloadTask(with: url) { urlOrNil, _, _ in
             guard let fileURL = urlOrNil else { return }
