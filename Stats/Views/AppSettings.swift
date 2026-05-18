@@ -63,6 +63,11 @@ class ApplicationSettings: NSStackView {
     private var startAtLoginBtn: NSSwitch?
     private var remoteControlBtn: NSSwitch?
     private var remoteUpdatesBtn: NSSwitch?
+
+    private var cooldownField: NSTextField?
+    private var cooldownStepper: NSStepper?
+    private var cooldownStateLabel: NSTextField?
+    private var lastVersionCheck: version_s?
     
     private var combinedModulesView: PreferencesSection?
     private var fanHelperView: PreferencesSection?
@@ -106,13 +111,54 @@ class ApplicationSettings: NSStackView {
             state: LaunchAtLogin.isEnabled
         )
 
+        // Build cooldown stepper + text field
+        let cooldownInitial = Store.shared.int(key: "update-cooldown-days", defaultValue: 0)
+        let cooldownFieldControl = NSTextField()
+        cooldownFieldControl.integerValue = cooldownInitial
+        cooldownFieldControl.alignment = .right
+        cooldownFieldControl.target = self
+        cooldownFieldControl.action = #selector(self.updateCooldownChanged(_:))
+        cooldownFieldControl.translatesAutoresizingMaskIntoConstraints = false
+        cooldownFieldControl.widthAnchor.constraint(equalToConstant: 50).isActive = true
+        let cooldownFormatter = NumberFormatter()
+        cooldownFormatter.minimum = 0
+        cooldownFormatter.maximum = 365
+        cooldownFormatter.allowsFloats = false
+        cooldownFieldControl.formatter = cooldownFormatter
+        self.cooldownField = cooldownFieldControl
+
+        let cooldownStepperControl = NSStepper()
+        cooldownStepperControl.minValue = 0
+        cooldownStepperControl.maxValue = 365
+        cooldownStepperControl.increment = 1
+        cooldownStepperControl.integerValue = cooldownInitial
+        cooldownStepperControl.target = self
+        cooldownStepperControl.action = #selector(self.updateCooldownChanged(_:))
+        self.cooldownStepper = cooldownStepperControl
+
+        let cooldownStack = NSStackView(views: [cooldownFieldControl, cooldownStepperControl])
+        cooldownStack.orientation = .horizontal
+        cooldownStack.spacing = 4
+
+        // Build cooldown state label
+        let stateLbl = NSTextField()
+        stateLbl.isEditable = false
+        stateLbl.isSelectable = false
+        stateLbl.isBezeled = false
+        stateLbl.backgroundColor = .clear
+        stateLbl.font = NSFont.systemFont(ofSize: 11)
+        stateLbl.textColor = .secondaryLabelColor
+        stateLbl.stringValue = ""
+        self.cooldownStateLabel = stateLbl
+
+        let cooldownTooltip = localizedString("Update cooldown tooltip")
+        cooldownFieldControl.toolTip = cooldownTooltip
+        cooldownStepperControl.toolTip = cooldownTooltip
+
         scrollView.stackView.addArrangedSubview(PreferencesSection([
             PreferencesRow(localizedString("Check for updates"), component: self.updateSelector!),
-            PreferencesRow(localizedString("Update cooldown"), component: selectView(
-                action: #selector(self.toggleUpdateCooldown),
-                items: UpdateCooldownOptions,
-                selected: self.updateCooldownValue
-            )),
+            PreferencesRow(localizedString("Update cooldown"), component: cooldownStack),
+            PreferencesRow(component: stateLbl),
             PreferencesRow(localizedString("Temperature"), component: selectView(
                 action: #selector(self.toggleTemperatureUnits),
                 items: TemperatureUnits,
@@ -248,10 +294,10 @@ class ApplicationSettings: NSStackView {
     internal func viewWillAppear() {
         self.startAtLoginBtn?.state = LaunchAtLogin.isEnabled ? .on : .off
         self.remoteControlBtn?.state = SystemStats.shared.control ? .on : .off
-        
+
         self.planField?.stringValue = SystemStats.shared.plan?.rawValue.capitalized ?? "Free"
         self.setRemoteSettings(SystemStats.shared.isAuthorized)
-        
+
         var idx = self.updateSelector?.indexOfSelectedItem ?? 0
         if let items = self.updateSelector?.menu?.items {
             for (i, item) in items.enumerated() {
@@ -261,6 +307,11 @@ class ApplicationSettings: NSStackView {
             }
         }
         self.updateSelector?.selectItem(at: idx)
+
+        let v = Store.shared.int(key: "update-cooldown-days", defaultValue: 0)
+        self.cooldownField?.integerValue = v
+        self.cooldownStepper?.integerValue = v
+        self.refreshCooldownStateLabel()
     }
     
     private func informationView() -> NSView {
@@ -323,12 +374,15 @@ class ApplicationSettings: NSStackView {
                 debug("error updater.check(): \(error!.localizedDescription)")
                 return
             }
-            
+
             guard let version: version_s = result else {
                 debug("download error(): no version found")
                 return
             }
-            
+
+            self.lastVersionCheck = version
+            DispatchQueue.main.async { self.refreshCooldownStateLabel() }
+
             DispatchQueue.main.async(execute: {
                 if self.updateWindow == nil {
                     let w = UpdateWindow()
@@ -340,17 +394,28 @@ class ApplicationSettings: NSStackView {
             })
         })
     }
+
+    @objc private func updateCooldownChanged(_ sender: NSControl) {
+        let clamped = Swift.max(0, Swift.min(365, sender.integerValue))
+        self.cooldownField?.integerValue = clamped
+        self.cooldownStepper?.integerValue = clamped
+        Store.shared.set(key: "update-cooldown-days", value: clamped)
+        self.refreshCooldownStateLabel()
+    }
+
+    private func refreshCooldownStateLabel() {
+        guard let v = self.lastVersionCheck, v.inCooldown, v.newest else {
+            self.cooldownStateLabel?.stringValue = ""
+            return
+        }
+        self.cooldownStateLabel?.stringValue = localizedString("Cooldown state", v.latest, "\(v.daysUntilReady)")
+    }
     
     @objc private func toggleUpdateInterval(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         Store.shared.set(key: "update-interval", value: key)
     }
 
-    @objc private func toggleUpdateCooldown(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String, let days = Int(key) else { return }
-        Store.shared.set(key: "update-cooldown-days", value: days)
-    }
-    
     @objc private func toggleTemperatureUnits(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         self.temperatureUnitsValue = key
