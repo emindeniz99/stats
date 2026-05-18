@@ -225,6 +225,8 @@ private class UpdateView: NSView {
     }
     
     internal func cooldownVersion(_ version: version_s) {
+        self.version = version
+
         let view: NSStackView = NSStackView(frame: NSRect(
             x: Constants.Settings.margin,
             y: 0,
@@ -269,25 +271,41 @@ private class UpdateView: NSView {
         let latestValue: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 0))
         latestValue.stringValue = version.latest
 
+        let daysText = version.daysUntilReady == 1
+            ? localizedString("1 day remaining")
+            : localizedString("%0 days remaining", "\(version.daysUntilReady)")
         let daysLabel: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 16))
-        daysLabel.stringValue = localizedString("Days remaining: ")
-        let daysValue: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 0))
-        daysValue.stringValue = "\(version.daysUntilReady)"
+        daysLabel.stringValue = daysText
+        daysLabel.alignment = .center
 
         info.addRow(with: [latestLabel, latestValue])
-        info.addRow(with: [daysLabel, daysValue])
 
-        let closeButton: NSButton = NSButton(frame: NSRect(x: 0, y: 0, width: view.frame.width, height: 26))
+        let buttons: NSStackView = NSStackView(frame: NSRect(x: 0, y: 0, width: view.frame.width, height: 26))
+        buttons.heightAnchor.constraint(equalToConstant: buttons.frame.height).isActive = true
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.distribution = .fillEqually
+
+        let closeButton: NSButton = NSButton(frame: NSRect(x: 0, y: 0, width: 0, height: 26))
         closeButton.title = localizedString("Close")
         closeButton.bezelStyle = .rounded
         closeButton.action = #selector(self.close)
         closeButton.target = self
 
+        let installAnywayButton: NSButton = NSButton(frame: NSRect(x: 0, y: 0, width: 0, height: 26))
+        installAnywayButton.title = localizedString("Install anyway")
+        installAnywayButton.bezelStyle = .rounded
+        installAnywayButton.action = #selector(self.installAnyway)
+        installAnywayButton.target = self
+
+        buttons.addArrangedSubview(closeButton)
+        buttons.addArrangedSubview(installAnywayButton)
+
         view.addArrangedSubview(header)
         view.addArrangedSubview(NSView())
         view.addArrangedSubview(info)
-        view.addArrangedSubview(NSView())
-        view.addArrangedSubview(closeButton)
+        view.addArrangedSubview(daysLabel)
+        view.addArrangedSubview(buttons)
 
         self.addSubview(view)
     }
@@ -371,6 +389,18 @@ private class UpdateView: NSView {
             if let error {
                 showAlert("Error update Stats", error, .critical)
             }
+        }
+    }
+
+    @objc private func installAnyway() {
+        let alert = NSAlert()
+        alert.messageText = localizedString("Install anyway?")
+        alert.informativeText = localizedString("Install anyway warning")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: localizedString("Install"))
+        alert.addButton(withTitle: localizedString("Cancel"))
+        if alert.runModal() == .alertFirstButtonReturn {
+            self.download()
         }
     }
 }
