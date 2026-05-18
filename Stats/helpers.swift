@@ -182,7 +182,12 @@ extension AppDelegate {
             if !version.newest {
                 return
             }
-            
+
+            if version.inCooldown {
+                debug("new version \(version.latest) is under cooldown, \(version.daysUntilReady) days remaining")
+                return
+            }
+
             if silent {
                 if let url = URL(string: version.url) {
                     updater.download(url, completion: { path in

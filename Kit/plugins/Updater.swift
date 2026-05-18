@@ -18,12 +18,16 @@ public struct version_s {
     public let latest: String
     public let newest: Bool
     public let url: String
-    
-    public init(current: String, latest: String, newest: Bool, url: String) {
+    public let inCooldown: Bool
+    public let daysUntilReady: Int
+
+    public init(current: String, latest: String, newest: Bool, url: String, inCooldown: Bool = false, daysUntilReady: Int = 0) {
         self.current = current
         self.latest = latest
         self.newest = newest
         self.url = url
+        self.inCooldown = inCooldown
+        self.daysUntilReady = daysUntilReady
     }
 }
 
@@ -75,17 +79,17 @@ public class Updater {
             completion(nil, "No internet connection")
             return
         }
-        
+
         let diff = (Int(Date().timeIntervalSince1970) - self.lastCheckTS) / 60
         if !force && diff <= 10 {
             completion(nil, "last check was \(diff) minutes ago, stopping...")
             return
         }
-        
+
         defer {
             self.lastCheckTS = Int(Date().timeIntervalSince1970)
         }
-        
+
         self.fetchRelease(uri: self.server) { (result, err) in
             guard let result = result, err == nil else {
                 self.fetchRelease(uri: self.github) { (result, err) in
@@ -93,33 +97,48 @@ public class Updater {
                         completion(nil, err)
                         return
                     }
-                    
-                    completion(version_s(
-                        current: self.currentVersion,
-                        latest: result.tag,
-                        newest: isNewestVersion(currentVersion: self.currentVersion, latestVersion: result.tag),
-                        url: result.url
-                    ), nil)
+                    completion(self.buildVersion(result), nil)
                 }
                 return
             }
-            
-            completion(version_s(
-                current: self.currentVersion,
-                latest: result.tag,
-                newest: isNewestVersion(currentVersion: self.currentVersion, latestVersion: result.tag),
-                url: result.url
-            ), nil)
+            completion(self.buildVersion(result), nil)
         }
     }
+
+    private var cooldownDays: Int {
+        Store.shared.int(key: "update-cooldown-days", defaultValue: 0)
+    }
+
+    private func buildVersion(_ result: (tag: String, url: String, publishedAt: Date?)) -> version_s {
+        let isNewer = isNewestVersion(currentVersion: self.currentVersion, latestVersion: result.tag)
+        var inCooldown = false
+        var daysUntilReady = 0
+
+        if isNewer, self.cooldownDays > 0, let publishedAt = result.publishedAt {
+            let daysSinceRelease = Calendar.current.dateComponents([.day], from: publishedAt, to: Date()).day ?? 0
+            if daysSinceRelease < self.cooldownDays {
+                inCooldown = true
+                daysUntilReady = self.cooldownDays - daysSinceRelease
+            }
+        }
+
+        return version_s(
+            current: self.currentVersion,
+            latest: result.tag,
+            newest: isNewer,
+            url: result.url,
+            inCooldown: inCooldown,
+            daysUntilReady: daysUntilReady
+        )
+    }
     
-    private func fetchRelease(uri: URL, completion: @escaping (_ result: (tag: String, url: String)?, _ error: Error?) -> Void) {
+    private func fetchRelease(uri: URL, completion: @escaping (_ result: (tag: String, url: String, publishedAt: Date?)?, _ error: Error?) -> Void) {
         let task = URLSession.shared.dataTask(with: uri) { data, _, error in
             guard let data = data, error == nil else {
                 completion(nil, "no data")
                 return
             }
-            
+
             do {
                 let jsonResponse = try JSONSerialization.jsonObject(with: data, options: [])
                 guard let jsonArray = jsonResponse as? [String: Any],
@@ -130,8 +149,14 @@ public class Updater {
                     completion(nil, "parse json")
                     return
                 }
-                
-                 completion((lastVersion, downloadURL), nil)
+
+                var publishedAt: Date?
+                if let publishedAtStr = jsonArray["published_at"] as? String {
+                    let formatter = ISO8601DateFormatter()
+                    publishedAt = formatter.date(from: publishedAtStr)
+                }
+
+                completion((lastVersion, downloadURL, publishedAt), nil)
             } catch let parsingError {
                 completion(nil, parsingError)
             }

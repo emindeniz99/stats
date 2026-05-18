@@ -16,6 +16,10 @@ class ApplicationSettings: NSStackView {
     private var updateIntervalValue: String {
         Store.shared.string(key: "update-interval", defaultValue: AppUpdateInterval.silent.rawValue)
     }
+
+    private var updateCooldownValue: String {
+        "\(Store.shared.int(key: "update-cooldown-days", defaultValue: 0))"
+    }
     
     private var temperatureUnitsValue: String {
         get { Store.shared.string(key: "temperature_units", defaultValue: "system") }
@@ -101,9 +105,14 @@ class ApplicationSettings: NSStackView {
             action: #selector(self.toggleLaunchAtLogin),
             state: LaunchAtLogin.isEnabled
         )
-        
+
         scrollView.stackView.addArrangedSubview(PreferencesSection([
             PreferencesRow(localizedString("Check for updates"), component: self.updateSelector!),
+            PreferencesRow(localizedString("Update cooldown"), component: selectView(
+                action: #selector(self.toggleUpdateCooldown),
+                items: UpdateCooldownOptions,
+                selected: self.updateCooldownValue
+            )),
             PreferencesRow(localizedString("Temperature"), component: selectView(
                 action: #selector(self.toggleTemperatureUnits),
                 items: TemperatureUnits,
@@ -335,6 +344,11 @@ class ApplicationSettings: NSStackView {
     @objc private func toggleUpdateInterval(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         Store.shared.set(key: "update-interval", value: key)
+    }
+
+    @objc private func toggleUpdateCooldown(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, let days = Int(key) else { return }
+        Store.shared.set(key: "update-cooldown-days", value: days)
     }
     
     @objc private func toggleTemperatureUnits(_ sender: NSMenuItem) {

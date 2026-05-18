@@ -81,7 +81,11 @@ private class UpdateViewController: NSViewController {
     
     internal func open(_ v: version_s) {
         self.update.clear()
-        
+
+        if v.inCooldown {
+            self.update.cooldownVersion(v)
+            return
+        }
         if v.newest {
             self.update.newVersion(v)
             return
@@ -220,6 +224,74 @@ private class UpdateView: NSView {
         self.addSubview(view)
     }
     
+    internal func cooldownVersion(_ version: version_s) {
+        let view: NSStackView = NSStackView(frame: NSRect(
+            x: Constants.Settings.margin,
+            y: 0,
+            width: self.frame.width-(Constants.Settings.margin*2),
+            height: self.frame.height
+        ))
+        view.orientation = .vertical
+        view.alignment = .centerX
+        view.distribution = .fillEqually
+        view.spacing = Constants.Settings.margin
+        view.edgeInsets = NSEdgeInsets(
+            top: Constants.Settings.margin*2,
+            left: 0,
+            bottom: Constants.Settings.margin,
+            right: 0
+        )
+
+        let header: NSStackView = NSStackView(frame: NSRect(x: 0, y: 0, width: 0, height: 44))
+        header.heightAnchor.constraint(equalToConstant: header.frame.height).isActive = true
+        header.orientation = .horizontal
+        header.spacing = 10
+        header.distribution = .equalCentering
+
+        let icon: NSImageView = NSImageView(image: NSImage(named: NSImage.Name("AppIcon"))!)
+        icon.setFrameSize(NSSize(width: 44, height: 44))
+        icon.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        let title: NSTextField = TextView()
+        title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        title.stringValue = localizedString("Update available in cooldown")
+
+        header.addArrangedSubview(icon)
+        header.addArrangedSubview(title)
+
+        let info: NSGridView = NSGridView(frame: NSRect(x: 0, y: 0, width: view.frame.width, height: 48))
+        info.heightAnchor.constraint(equalToConstant: info.frame.height).isActive = true
+        info.rowSpacing = 0
+        info.yPlacement = .fill
+        info.xPlacement = .fill
+
+        let latestLabel: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 16))
+        latestLabel.stringValue = localizedString("Latest version: ")
+        let latestValue: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 0))
+        latestValue.stringValue = version.latest
+
+        let daysLabel: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 16))
+        daysLabel.stringValue = localizedString("Days remaining: ")
+        let daysValue: NSTextField = TextView(frame: NSRect(x: 0, y: 0, width: 0, height: 0))
+        daysValue.stringValue = "\(version.daysUntilReady)"
+
+        info.addRow(with: [latestLabel, latestValue])
+        info.addRow(with: [daysLabel, daysValue])
+
+        let closeButton: NSButton = NSButton(frame: NSRect(x: 0, y: 0, width: view.frame.width, height: 26))
+        closeButton.title = localizedString("Close")
+        closeButton.bezelStyle = .rounded
+        closeButton.action = #selector(self.close)
+        closeButton.target = self
+
+        view.addArrangedSubview(header)
+        view.addArrangedSubview(NSView())
+        view.addArrangedSubview(info)
+        view.addArrangedSubview(NSView())
+        view.addArrangedSubview(closeButton)
+
+        self.addSubview(view)
+    }
+
     internal func clear() {
         self.subviews.filter{ !($0 is NSVisualEffectView) }.forEach{ $0.removeFromSuperview() }
     }

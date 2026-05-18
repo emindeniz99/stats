@@ -58,6 +58,16 @@ public let AppUpdateIntervals: [KeyValue_t] = [
     KeyValue_t(key: "Never", value: AppUpdateInterval.never.rawValue)
 ]
 
+public let UpdateCooldownOptions: [KeyValue_t] = [
+    KeyValue_t(key: "0", value: "No cooldown"),
+    KeyValue_t(key: "separator", value: "separator"),
+    KeyValue_t(key: "1", value: "1 day"),
+    KeyValue_t(key: "3", value: "3 days"),
+    KeyValue_t(key: "7", value: "7 days"),
+    KeyValue_t(key: "14", value: "14 days"),
+    KeyValue_t(key: "30", value: "30 days")
+]
+
 public let TemperatureUnits: [KeyValue_t] = [
     KeyValue_t(key: "system", value: "System"),
     KeyValue_t(key: "separator", value: "separator"),

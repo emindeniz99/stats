@@ -180,6 +180,15 @@
 "Downloading..." = "Downloading...";
 "Current version: " = "Current version:  ";
 "Latest version: " = "Latest version:    ";
+"Update cooldown" = "Update cooldown";
+"No cooldown" = "No cooldown";
+"1 day" = "1 day";
+"3 days" = "3 days";
+"7 days" = "7 days";
+"14 days" = "14 days";
+"30 days" = "30 days";
+"Update available in cooldown" = "Update available in cooldown";
+"Days remaining: " = "Days remaining:   ";
 
 // Widgets
 "Color" = "Color";
