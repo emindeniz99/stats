@@ -181,14 +181,14 @@
 "Current version: " = "Current version:  ";
 "Latest version: " = "Latest version:    ";
 "Update cooldown" = "Update cooldown";
-"No cooldown" = "No cooldown";
-"1 day" = "1 day";
-"3 days" = "3 days";
-"7 days" = "7 days";
-"14 days" = "14 days";
-"30 days" = "30 days";
 "Update available in cooldown" = "Update available in cooldown";
-"Days remaining: " = "Days remaining:   ";
+"Update cooldown tooltip" = "Wait this many days after a release before offering it. Helps protect against supply-chain attacks. 0 disables the cooldown.";
+"Cooldown state" = "%0 available — %1 days remaining";
+"1 day remaining" = "1 day remaining";
+"%0 days remaining" = "%0 days remaining";
+"Install anyway" = "Install anyway";
+"Install anyway?" = "Install anyway?";
+"Install anyway warning" = "This version is still inside the configured security cooldown window. Installing now skips the waiting period. Continue?";
 
 // Widgets
 "Color" = "Color";
