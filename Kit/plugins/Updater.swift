@@ -43,6 +43,7 @@ public class Updater {
     private let github: URL
     private let githubList: URL
     private let server: URL
+    private let maxPagesToScan = 3
 
     private let appName: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as! String
     private let currentVersion: String = "v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String)"
@@ -68,7 +69,7 @@ public class Updater {
 
     public init(github: String, url: String) {
         self.github = URL(string: "https://api.github.com/repos/\(github)/releases/latest")!
-        self.githubList = URL(string: "https://api.github.com/repos/\(github)/releases?per_page=10")!
+        self.githubList = URL(string: "https://api.github.com/repos/\(github)/releases?per_page=30")!
         self.server = URL(string: "\(url)?macOS=\(ProcessInfo().operatingSystemVersion.getFullVersion())")!
     }
     
@@ -92,6 +93,13 @@ public class Updater {
             self.lastCheckTS = Int(Date().timeIntervalSince1970)
         }
 
+        // When cooldown is enabled, skip the server (it may not return published_at)
+        // and go straight to GitHub releases where we can inspect release dates.
+        if self.cooldownDays > 0 {
+            self.checkGitHubReleases(completion: completion)
+            return
+        }
+
         // Try custom server for the latest release first
         self.fetchRelease(uri: self.server) { result, err in
             guard let result = result, err == nil else {
@@ -110,21 +118,67 @@ public class Updater {
     }
 
     // Fetch the GitHub releases list and return the best candidate respecting cooldown.
+    // Scans up to maxPagesToScan pages, stopping early once a past-cooldown release is found
+    // or once a page contains no newer-than-current release (older pages won't either).
     private func checkGitHubReleases(completion: @escaping (_ result: version_s?, _ error: Error?) -> Void) {
-        self.fetchReleases(uri: self.githubList) { releases, err in
-            guard let releases = releases, err == nil else {
-                // List endpoint failed, fall back to single-release endpoint
-                self.fetchRelease(uri: self.github) { result, err in
-                    guard let result = result, err == nil else {
-                        completion(nil, err)
-                        return
+        var bestInCooldown: version_s? = nil
+
+        func scanPage(_ page: Int) {
+            self.fetchReleases(page: page) { releases, err in
+                guard let releases = releases, err == nil else {
+                    if page == 1 {
+                        // List endpoint failed on first page — fall back to single-release endpoint
+                        self.fetchRelease(uri: self.github) { result, err in
+                            guard let result = result, err == nil else {
+                                completion(nil, err)
+                                return
+                            }
+                            completion(self.buildVersion(result), nil)
+                        }
+                    } else {
+                        // Later page failed — return what we have
+                        completion(bestInCooldown, nil)
                     }
-                    completion(self.buildVersion(result), nil)
+                    return
                 }
-                return
+
+                let candidate = self.buildBestVersion(from: releases)
+
+                // Check whether this page contained any release newer than current.
+                // If not, older pages won't either — stop paginating.
+                let hasNewer = releases.contains { self.isNewestVersion(current: self.currentVersion, latest: $0.tag) }
+                guard hasNewer else {
+                    completion(bestInCooldown ?? candidate, nil)
+                    return
+                }
+
+                if let v = candidate, !v.inCooldown, v.newest {
+                    // Found a past-cooldown release — return it immediately
+                    completion(v, nil)
+                    return
+                }
+
+                // Still in cooldown — remember the best candidate and try next page
+                if let v = candidate, v.newest {
+                    if bestInCooldown == nil {
+                        bestInCooldown = v
+                    }
+                }
+
+                if page < self.maxPagesToScan {
+                    scanPage(page + 1)
+                } else {
+                    completion(bestInCooldown ?? candidate, nil)
+                }
             }
-            completion(self.buildBestVersion(from: releases), nil)
         }
+
+        scanPage(1)
+    }
+
+    // Helper to check newer version without the per-call overhead of the public signature
+    private func isNewestVersion(current: String, latest: String) -> Bool {
+        return Kit.isNewestVersion(currentVersion: current, latestVersion: latest)
     }
 
     private var cooldownDays: Int {
@@ -226,8 +280,21 @@ public class Updater {
         task.resume()
     }
     
-    private func fetchReleases(uri: URL, completion: @escaping (_ result: [(tag: String, url: String, publishedAt: Date?)]?, _ error: Error?) -> Void) {
-        let task = URLSession.shared.dataTask(with: uri) { data, _, error in
+    private func fetchReleases(page: Int = 1, completion: @escaping (_ result: [(tag: String, url: String, publishedAt: Date?)]?, _ error: Error?) -> Void) {
+        guard var components = URLComponents(url: self.githubList, resolvingAgainstBaseURL: false) else {
+            completion(nil, "invalid URL")
+            return
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "page" }
+        queryItems.append(URLQueryItem(name: "page", value: "\(page)"))
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            completion(nil, "invalid URL after page param")
+            return
+        }
+
+        let task = URLSession.shared.dataTask(with: url) { data, _, error in
             guard let data = data, error == nil else {
                 completion(nil, "no data")
                 return
@@ -244,6 +311,8 @@ public class Updater {
                 var results: [(tag: String, url: String, publishedAt: Date?)] = []
 
                 for item in items {
+                    if item["prerelease"] as? Bool == true { continue }
+                    if item["draft"] as? Bool == true { continue }
                     guard let tag = item["tag_name"] as? String,
                           let assets = item["assets"] as? [[String: Any]],
                           let asset = assets.first(where: { $0["name"] as? String == "\(self.appName).dmg" }),
