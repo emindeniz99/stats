@@ -1,0 +1,120 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v2.12.15)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      APP: Stats
+      VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode.app
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          # Create a temporary keychain and make it the default search target.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import the Developer ID certificate.
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Allow codesign/productsign to use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Put our keychain first in the search list so signing picks up the identity.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed s/\"//g)
+
+          echo "Imported identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Archive and export
+        run: |
+          set -euo pipefail
+          BUILD_PATH="$PWD/build"
+          rm -rf "$BUILD_PATH"
+
+          xcodebuild \
+            -scheme "$APP" \
+            -destination 'platform=macOS' \
+            -configuration Release archive \
+            -archivePath "$BUILD_PATH/$APP.xcarchive"
+
+          xcodebuild -exportArchive \
+            -exportOptionsPlist "$PWD/exportOptions.plist" \
+            -archivePath "$BUILD_PATH/$APP.xcarchive" \
+            -exportPath "$BUILD_PATH"
+
+          ditto -c -k --keepParent "$BUILD_PATH/$APP.app" "$BUILD_PATH/$APP.zip"
+
+      - name: Notarize
+        env:
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          BUILD_PATH="$PWD/build"
+
+          # Write the App Store Connect API key (.p8) used by notarytool.
+          echo "$APPLE_NOTARIZATION_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+
+          xcrun notarytool submit "$BUILD_PATH/$APP.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+            --wait
+
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+          # Staple the ticket onto the .app and verify.
+          xcrun stapler staple "$BUILD_PATH/$APP.app"
+          spctl -a -t exec -vvv "$BUILD_PATH/$APP.app"
+
+      - name: Create DMG
+        run: make prepare-dmg
+
+      - name: Package dSYMs
+        run: make prepare-dSYM
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: ${{ env.VERSION }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            Stats.dmg
+            dSYMs.zip
