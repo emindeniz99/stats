@@ -243,6 +243,20 @@ public class Updater {
         return buildVersion(releases[0])  // No newer version at all
     }
     
+    // GitHub timestamps are RFC 3339 / ISO 8601. `published_at` normally comes without
+    // fractional seconds ("2024-04-14T10:00:00Z"), but a default ISO8601DateFormatter
+    // returns nil if fractional seconds ever appear — which would silently bypass the
+    // cooldown. Parse defensively by trying both representations.
+    private static func parseGitHubDate(_ string: String?) -> Date? {
+        guard let string = string else { return nil }
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: string) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: string)
+    }
+
     private func fetchRelease(uri: URL, completion: @escaping (_ result: (tag: String, url: String, publishedAt: Date?)?, _ error: Error?) -> Void) {
         let task = URLSession.shared.dataTask(with: uri) { data, _, error in
             guard let data = data, error == nil else {
@@ -261,11 +275,7 @@ public class Updater {
                     return
                 }
 
-                var publishedAt: Date?
-                if let publishedAtStr = jsonArray["published_at"] as? String {
-                    let formatter = ISO8601DateFormatter()
-                    publishedAt = formatter.date(from: publishedAtStr)
-                }
+                let publishedAt = Updater.parseGitHubDate(jsonArray["published_at"] as? String)
 
                 completion((lastVersion, downloadURL, publishedAt), nil)
             } catch let parsingError {
@@ -302,7 +312,6 @@ public class Updater {
                     return
                 }
 
-                let formatter = ISO8601DateFormatter()
                 var results: [(tag: String, url: String, publishedAt: Date?)] = []
 
                 for item in items {
@@ -314,10 +323,7 @@ public class Updater {
                           let downloadURL = asset["browser_download_url"] as? String else {
                         continue
                     }
-                    var publishedAt: Date?
-                    if let str = item["published_at"] as? String {
-                        publishedAt = formatter.date(from: str)
-                    }
+                    let publishedAt = Updater.parseGitHubDate(item["published_at"] as? String)
                     results.append((tag, downloadURL, publishedAt))
                 }
 
